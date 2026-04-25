@@ -1,0 +1,40 @@
+{
+  "name": "ACELERAME Motor Multi-Tenant v2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 10 }] }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "name": "Cada 10 min",
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SUPABASE_MASTER_URL}}/rest/v1/clientes?motor_activo=eq.true&select=*",
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{$env.SUPABASE_MASTER_SERVICE_KEY}}" },
+            { "name": "Authorization", "value": "Bearer {{$env.SUPABASE_MASTER_SERVICE_KEY}}" },
+            { "name": "Accept-Profile", "value": "master" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "name": "Obtener clientes activos",
+      "position": [200, 0]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.splitInBatches",
+      "name": "Loop por cliente",
+      "position": [400, 0]
+    }
+  ],
+  "connections": {
+    "Cada 10 min": { "main": [[{ "node": "Obtener clientes activos", "type": "main", "index": 0 }]] },
+    "Obtener clientes activos": { "main": [[{ "node": "Loop por cliente", "type": "main", "index": 0 }]] }
+  },
+  "_comment": "Esqueleto base. Completar etapas 0-12 según motor mono-tenant existente."
+}
