@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { getClienteContext, createClienteSupabase, clienteTieneDB } from '@/lib/cliente-db'
+import { getClienteContext, createClienteSupabase, clienteTieneDB, listarLeads } from '@/lib/cliente-db'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import { Search, Plug, AlertCircle, ChevronLeft, ChevronRight, Filter } from 'lucide-react'
 
@@ -35,9 +35,8 @@ export default async function LeadsPage({
   if (!cliente) redirect('/login')
 
   const tieneDB = clienteTieneDB(cliente)
-  const clienteDB = tieneDB ? createClienteSupabase(cliente) : null
 
-  if (!tieneDB || !clienteDB) {
+  if (!tieneDB) {
     return (
       <div className="space-y-6">
         <h1 className="font-serif text-3xl font-bold">Leads</h1>
@@ -62,36 +61,49 @@ export default async function LeadsPage({
   const etapaFilter = params.etapa
   const search = (params.search ?? '').trim()
 
-  let query = clienteDB
-    .from('prospeccion_leads')
-    .select('handle,nombre,bio,etapa,score,respuesta_lead,ultimo_contacto,seguidores', { count: 'exact' })
-    .order('etapa', { ascending: false })
-    .order('score', { ascending: false, nullsFirst: false })
-
-  if (etapaFilter !== undefined && etapaFilter !== '') {
-    query = query.eq('etapa', parseInt(etapaFilter))
-  }
-
-  if (search) {
-    query = query.or(`handle.ilike.%${search}%,nombre.ilike.%${search}%,bio.ilike.%${search}%`)
-  }
-
-  query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
-
   let leads: any[] = []
   let total = 0
   let errorMsg: string | null = null
 
   try {
-    const { data, count, error } = await query
-    if (error) throw error
-    leads = data ?? []
-    total = count ?? 0
+    if (cliente.db_modalidad === 'byodb') {
+      // BYODB: query directo
+      const clienteDB = createClienteSupabase(cliente)
+      if (!clienteDB) throw new Error('No DB connection')
+
+      let query = clienteDB
+        .from('prospeccion_leads')
+        .select('handle,nombre,bio,etapa,score,respuesta_lead,ultimo_contacto,seguidores', { count: 'exact' })
+        .order('etapa', { ascending: false })
+        .order('score', { ascending: false, nullsFirst: false })
+
+      if (etapaFilter !== undefined && etapaFilter !== '') {
+        query = query.eq('etapa', parseInt(etapaFilter))
+      }
+      if (search) {
+        query = query.or(`handle.ilike.%${search}%,nombre.ilike.%${search}%,bio.ilike.%${search}%`)
+      }
+      query = query.range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
+      const { data, count, error } = await query
+      if (error) throw error
+      leads = data ?? []
+      total = count ?? 0
+    } else {
+      // Managed: RPC (sin search por ahora; etapa sí soportado)
+      const etapa = etapaFilter ? parseInt(etapaFilter) : undefined
+      leads = await listarLeads(cliente, {
+        etapa,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      })
+      // Para total, usamos las metricas del schema
+      total = leads.length // aproximado; mejorar cuando agreguemos count en RPC
+    }
   } catch (e: any) {
     errorMsg = e?.message ?? 'Error leyendo leads'
   }
 
-  const totalPages = Math.ceil(total / PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
     <div className="space-y-6">
@@ -99,7 +111,7 @@ export default async function LeadsPage({
         <div>
           <h1 className="font-serif text-3xl font-bold">Leads</h1>
           <p className="text-fg-muted mt-1">
-            {formatNumber(total)} leads · página {page} de {Math.max(totalPages, 1)}
+            {formatNumber(total)} leads · página {page} de {totalPages}
           </p>
         </div>
       </div>
@@ -155,7 +167,7 @@ export default async function LeadsPage({
                 {leads.length === 0 && (
                   <tr>
                     <td colSpan={6} className="px-4 py-12 text-center text-fg-muted">
-                      No hay leads que coincidan con esos filtros.
+                      No hay leads todavía. Cuando el motor empiece a scrapear van a aparecer acá.
                     </td>
                   </tr>
                 )}

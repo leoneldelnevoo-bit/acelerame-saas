@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { getClienteContext, createClienteSupabase, clienteTieneDB } from '@/lib/cliente-db'
+import { getClienteContext, clienteTieneDB, listarConversaciones, listarAgendados } from '@/lib/cliente-db'
 import { timeAgo } from '@/lib/utils'
 import { Inbox, MessageSquare, Calendar, AlertCircle, Plug } from 'lucide-react'
 
@@ -12,9 +12,8 @@ export default async function BandejaPage() {
   if (!cliente) redirect('/login')
 
   const tieneDB = clienteTieneDB(cliente)
-  const clienteDB = tieneDB ? createClienteSupabase(cliente) : null
 
-  if (!tieneDB || !clienteDB) {
+  if (!tieneDB) {
     return (
       <div className="space-y-6">
         <h1 className="font-serif text-3xl font-bold">Bandeja</h1>
@@ -33,22 +32,12 @@ export default async function BandejaPage() {
   let errorMsg: string | null = null
 
   try {
-    const { data: respondieron } = await clienteDB
-      .from('prospeccion_leads')
-      .select('handle,nombre,etapa,respuesta_lead,historial_conversacion,fecha_ultima_respuesta,score')
-      .in('etapa', [2, 4, 6, 8, 10])
-      .order('fecha_ultima_respuesta', { ascending: false, nullsFirst: false })
-      .limit(50)
-
-    const { data: agendadosData } = await clienteDB
-      .from('prospeccion_leads')
-      .select('handle,nombre,respuesta_lead,fecha_ultima_respuesta,score')
-      .eq('etapa', 12)
-      .order('fecha_ultima_respuesta', { ascending: false, nullsFirst: false })
-      .limit(20)
-
-    conversaciones = respondieron ?? []
-    agendados = agendadosData ?? []
+    const [convs, ags] = await Promise.all([
+      listarConversaciones(cliente, 50),
+      listarAgendados(cliente, 20),
+    ])
+    conversaciones = convs
+    agendados = ags
   } catch (e: any) {
     errorMsg = e?.message ?? 'Error'
   }

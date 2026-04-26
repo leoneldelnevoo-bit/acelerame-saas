@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createMasterAdminClient, createMasterServerClient } from '@/lib/supabase/server'
-import { setupClienteManaged } from '@/lib/onboarding/setup-managed'
-import { slugify } from '@/lib/utils'
+import { slugify, clienteSchemaName } from '@/lib/utils'
 
 /**
  * POST: crea registro en master.clientes después del signup
@@ -18,13 +17,11 @@ export async function POST(req: NextRequest) {
     const admin = createMasterAdminClient()
     const slug = slugRaw || slugify(empresa || nombre_completo)
 
-    // Verificar que no exista ya
     const { data: existente } = await admin.from('clientes').select('id').eq('email', email).maybeSingle()
     if (existente) {
       return NextResponse.json({ ok: true, id: existente.id, existed: true })
     }
 
-    // Crear cliente
     const { data: cliente, error } = await admin.from('clientes').insert({
       email,
       nombre_completo,
@@ -32,18 +29,16 @@ export async function POST(req: NextRequest) {
       slug,
       estado: 'trial',
       es_founder: false,
+      rol: 'cliente',
       motor_activo: false,
-      db_modalidad: null, // se elige en wizard
+      db_modalidad: null,
       schema_db: 'public',
       onboarding_completado: false,
       onboarding_paso: 1,
     }).select().single()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    // Crear saldo inicial (0 créditos)
     await admin.from('creditos_saldo').insert({
       cliente_id: cliente.id,
       creditos_actuales: 0,
@@ -58,7 +53,8 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * PUT: marca onboarding como completo + crea schema si modalidad=managed
+ * PUT: marca db_modalidad + crea schema si modalidad=managed
+ * Body: { db_modalidad?: 'managed' | 'byodb', nicho?: string, completar?: boolean }
  */
 export async function PUT(req: NextRequest) {
   try {
@@ -70,20 +66,31 @@ export async function PUT(req: NextRequest) {
     const { db_modalidad, nicho, completar } = body
 
     const admin = createMasterAdminClient()
-    const { data: cliente } = await admin.from('clientes').select('*').eq('email', user.email).maybeSingle()
-    if (!cliente) return NextResponse.json({ error: 'No cliente' }, { status: 404 })
+    const { data: cliente, error: errFetch } = await admin.from('clientes').select('id, slug, db_modalidad, schema_db').eq('email', user.email).maybeSingle()
+    if (errFetch || !cliente) return NextResponse.json({ error: 'No cliente' }, { status: 404 })
 
-    // Si está pidiendo crear schema managed
+    // Si pidió Managed: crear schema (idempotente)
     if (db_modalidad === 'managed') {
-      const result = await setupClienteManaged(cliente.id, cliente.slug)
-      if (!result.success) {
-        return NextResponse.json({ error: result.error }, { status: 500 })
+      const schemaName = clienteSchemaName(cliente.slug)
+      const { data: rpcData, error: rpcErr } = await admin.rpc('crear_schema_cliente', {
+        p_cliente_id: cliente.id,
+        p_schema_name: schemaName,
+      })
+      if (rpcErr) {
+        return NextResponse.json({ error: 'Error creando schema: ' + rpcErr.message }, { status: 500 })
       }
+      if (rpcData && !rpcData.ok) {
+        return NextResponse.json({ error: rpcData.error || 'Error creando schema' }, { status: 500 })
+      }
+      // crear_schema_cliente ya hace el UPDATE de master.clientes, así que no necesito hacerlo acá
     }
 
-    // Actualizar
+    // Updates manuales (nicho, completar, byodb sin schema)
     const updates: any = {}
-    if (db_modalidad) updates.db_modalidad = db_modalidad
+    if (db_modalidad === 'byodb') {
+      updates.db_modalidad = 'byodb'
+      updates.schema_db = 'public'
+    }
     if (nicho) updates.nicho = nicho
     if (completar) {
       updates.onboarding_completado = true
@@ -94,7 +101,12 @@ export async function PUT(req: NextRequest) {
       await admin.from('clientes').update(updates).eq('id', cliente.id)
     }
 
-    return NextResponse.json({ ok: true })
+    // Devolver el estado nuevo
+    const { data: clienteActualizado } = await admin.from('clientes')
+      .select('id, slug, db_modalidad, schema_db, supabase_test_status, onboarding_completado')
+      .eq('id', cliente.id).single()
+
+    return NextResponse.json({ ok: true, cliente: clienteActualizado })
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? 'Internal error' }, { status: 500 })
   }
