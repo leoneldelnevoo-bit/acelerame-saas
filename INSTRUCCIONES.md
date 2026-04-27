@@ -1,78 +1,55 @@
-# 🚀 ACELERAME SaaS - Bundle v2 (Sesión 25/04 - parte 2)
+# 🚀 Bundle v3 — Personalización IA
 
-Este bundle incluye **14 archivos** con:
+## ✅ Lo nuevo
 
-## ✅ Lo nuevo en este bundle
+### Página /configuracion completamente reescrita
+4 tabs:
+- **Cuenta** — info read-only de la cuenta
+- **Producto** — qué vendés, propuesta de valor, link de agenda
+- **Buyer Persona** — nicho, dolor, objeciones, criterios calificación
+- **Tu voz / Tono** — región (AR/MX/ES/etc), palabras prohibidas, ejemplos
 
-### 1. UI de Integraciones completa
-- `/integraciones` reescrita con **8 conectores agrupados** por sección:
-  - 🗄️ Base de datos (BYODB / Managed)
-  - 🔍 Apify Scraping (configurar targets)
-  - 📸 Instagram (cuentas + sessionid)
-  - 🤖 Claude IA (estado del API key)
-  - ⚙️ n8n Motor (estado del workflow)
-  - 📧 Email Resend (próximamente)
-  - 💬 WhatsApp Business (próximamente)
-  - 🤖 ManyChat (próximamente)
-  - 📅 Calendly (próximamente)
+### API /api/configuracion
+- GET: trae config actual
+- PUT: upsert con sanitización de campos
 
-### 2. Páginas funcionales nuevas
-- `/integraciones/setup-managed` — flow para crear schema Managed (botón → 2 seg → listo)
-- `/integraciones/conectar-supabase` — flow BYODB con form + test conexión
-- `/integraciones/instagram` — gestión de cuentas IG con instrucciones para sessionid
-- `/integraciones/apify` — configurar targets de scraping con costos estimados
+### /integraciones
+Nueva card "Personalización IA" en la sección "IA y automatización" que:
+- Muestra estado: Conectado (si completaste config) / Sin conectar
+- Muestra producto + nicho cuando está completo
+- Linkea a /configuracion
 
-### 3. APIs corregidas
-- `/api/onboarding/setup-managed` — usa RPC `crear_schema_cliente`
-- `/api/onboarding/instagram` — usa RPCs para Managed
-- `/api/onboarding/scraping-config` — usa RPCs para Managed
-- `/api/integraciones/apify-scraping` — registra eventos en master.eventos_clientes
+## 🗄️ Backend (ya aplicado en Supabase, no toques)
 
-### 4. Páginas dashboard actualizadas
-- `/leads` — soporta BYODB y Managed (via `listarLeads`)
-- `/bandeja` — soporta BYODB y Managed (via `listarConversaciones` + `listarAgendados`)
-
-### 5. `cliente-db.ts` reescrito
-Con funciones helper que usan RPCs en master.* para acceder a schemas dinámicos.
+- Tabla `master.cliente_config` con 17 columnas (producto, buyer persona, voz, criterios)
+- Función `master.get_cliente_config(p_cliente_id)` para que el motor n8n lea config rápido
+- Trigger `updated_at` automático
 
 ## 📋 Cómo aplicar (3 comandos)
 
 ```bash
 cd ~/Downloads/acelerame-final
-unzip -o ~/Downloads/acelerame-fix-bundle-v2.zip -d /tmp/fix
+unzip -o ~/Downloads/acelerame-fix-bundle-v3.zip -d /tmp/fix
 cp -r /tmp/fix/acelerame-fix-bundle/* .
 git add -A
-git commit -m "feat: integraciones UI completa + páginas instagram/apify"
+git commit -m "feat: configuracion IA con tabs (producto/buyer/voz)"
 git push
 ```
 
-Vercel redeploya automáticamente en ~3 min.
+Vercel redeploya automáticamente en ~2 min.
 
-## 🎯 Cómo testearlo después del deploy
+## 🎯 Después del deploy
 
-1. Login con `leo@acelerame.com` / `teclado`
-2. Ir a `/integraciones`
-3. Vas a ver las 8 secciones de conectores
-4. Click en "Cargar cuenta" en Instagram → carga form
-5. Click en "Configurar targets" en Apify → carga form
+1. Login con `leo@acelerame.com`
+2. Ir a `/configuracion`
+3. Cargar info en las 3 tabs (Producto / Buyer / Voz)
+4. Guardar
+5. Volver a `/integraciones` → ver el card "Personalización IA" en verde "Conectado"
 
-## ✅ Backend (NO TOCAR — ya está aplicado)
+## 🔜 Próximos pasos (próxima sesión)
 
-- Función `master.crear_schema_cliente` 
-- 8 funciones RPC helper en master
-- PostgREST con `master` expuesto
-- Schemas `cliente_leo` y `cliente_good` listos
-- Tabla `master.eventos_clientes`
-
-## 🛡️ acelerame.online — INTACTO
-
-Verificado: solo se borraron proyectos huérfanos.
-- ✅ `acelerame-app` (acelerame.online) — INTACTO
-- ✅ `acelerame-sas` (el SaaS) — INTACTO
-
-## 🚧 Pendientes
-
-1. Cargar `ANTHROPIC_API_KEY` en Vercel
-2. Cargar anon key Sukhafé para Poncho
-3. Conectar motor n8n al multi-tenant
-4. Domain custom (cuando quieras)
+1. **Onboardear Poncho** con su Supabase BYODB (cuando me pases URL + anon_key)
+2. **Acreditar 2,000 créditos** en su cuenta ($200 USD)
+3. **Modificar motor n8n** para que lea `master.cliente_config` y personalice prompts
+4. **Multi-tenant en n8n** con loop por clientes activos
+5. **Sistema de descuento de créditos** por acción

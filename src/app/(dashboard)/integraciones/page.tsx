@@ -1,10 +1,11 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { getClienteContext, clienteTieneDB, listarCuentasIG, listarScrapingConfig } from '@/lib/cliente-db'
+import { createMasterAdminClient } from '@/lib/supabase/server'
 import {
   Database, CheckCircle2, AlertCircle, Plug, Instagram, Mail, MessageSquare,
   Sparkles, Workflow, Calendar, Bot, Settings as SettingsIcon, ArrowRight,
-  Zap, Lock, Search, Send
+  Zap, Lock, Search, Send, UserCircle
 } from 'lucide-react'
 
 export const revalidate = 0
@@ -19,6 +20,19 @@ export default async function IntegracionesPage() {
   const targets = tieneDB ? await listarScrapingConfig(cliente) : []
   const tieneIG = cuentasIG.length > 0
   const tieneTargets = targets.length > 0
+
+  // Cargar config personalización del cliente
+  const admin = createMasterAdminClient()
+  const { data: config } = await admin
+    .from('cliente_config')
+    .select('producto_nombre, buyer_persona_nicho, ejemplos_mensajes')
+    .eq('cliente_id', cliente.id)
+    .maybeSingle()
+  const configCompleto = !!(
+    config?.producto_nombre &&
+    config?.buyer_persona_nicho &&
+    config?.ejemplos_mensajes
+  )
 
   // Anthropic key se valida por presencia de la env var (cliente no la maneja)
   const tieneAnthropicKey = !!process.env.ANTHROPIC_API_KEY
@@ -150,6 +164,38 @@ export default async function IntegracionesPage() {
 
       {/* === SECCIÓN 3: IA Y AUTOMATIZACIÓN === */}
       <SeccionTitulo icon={Bot} titulo="IA y automatización" />
+
+      <CardConectable
+        titulo="Personalización IA — Tu producto y tu voz"
+        descripcion="La IA usa esto para personalizar cada mensaje según tu negocio."
+        icon={UserCircle}
+        conectado={configCompleto}
+        body={
+          <div className="text-sm">
+            {configCompleto ? (
+              <p className="text-fg-muted">
+                <span className="text-fg">Producto:</span>{' '}
+                <span className="text-gold">{config?.producto_nombre}</span>
+                {' · '}
+                <span className="text-fg">Nicho:</span>{' '}
+                {config?.buyer_persona_nicho}
+              </p>
+            ) : (
+              <p className="text-fg-muted">
+                Cargá tu producto, buyer persona y ejemplos de tu voz. Sin esto, la
+                IA escribe genérico.
+              </p>
+            )}
+            <Link
+              href="/configuracion"
+              className="inline-flex items-center gap-2 text-sm text-gold hover:text-gold-hover mt-3"
+            >
+              {configCompleto ? 'Editar personalización' : 'Configurar ahora'}{' '}
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          </div>
+        }
+      />
 
       <CardConectable
         titulo="Claude IA — Mensajes personalizados"
