@@ -37,7 +37,6 @@ export type ClienteContext = {
 
 /**
  * Obtiene el contexto completo del cliente logueado.
- * Returns null si no hay sesión.
  */
 export async function getClienteContext(): Promise<ClienteContext | null> {
   const supabase = await createMasterServerClient()
@@ -81,7 +80,6 @@ export function clienteTieneDB(cliente: ClienteContext): boolean {
   if (cliente.db_modalidad === 'byodb') {
     return !!(cliente.supabase_url && cliente.supabase_anon_key && cliente.supabase_test_status === 'ok')
   }
-  // Managed: siempre OK porque usamos public con cliente_id
   return cliente.db_modalidad === 'managed'
 }
 
@@ -89,9 +87,6 @@ export function clienteTieneDB(cliente: ClienteContext): boolean {
  * Crea cliente Supabase para acceder a los datos del cliente.
  * - BYODB: usa el Supabase del cliente (schema public)
  * - Managed: usa nuestro Supabase (schema public con filtros por cliente_id)
- *
- * IMPORTANTE: Quien use este cliente DEBE filtrar por cliente_id en cada query.
- * Use queryDB() helper que hace el filtro automáticamente.
  */
 export function createClienteSupabase(cliente: ClienteContext): SupabaseClient | null {
   if (!clienteTieneDB(cliente)) return null
@@ -104,46 +99,20 @@ export function createClienteSupabase(cliente: ClienteContext): SupabaseClient |
     })
   }
 
-  // Managed: usa el admin client (acceso completo, pero filtramos por cliente_id manualmente)
+  // Managed: usa el admin client del master (schema public con filtros)
   return createMasterAdminClient() as unknown as SupabaseClient
 }
 
 /**
- * Helper que devuelve un query builder ya filtrado por cliente_id (para Managed)
- * o sin filtro (para BYODB, donde el cliente tiene su propio Supabase)
+ * Helper: aplica filtro cliente_id solo en modalidad Managed.
+ * En BYODB no se filtra porque el Supabase es del cliente.
  */
-export function queryDB<T = any>(cliente: ClienteContext, table: string) {
-  const db = createClienteSupabase(cliente)
-  if (!db) return null
-
-  // BYODB: el Supabase es del cliente, no se filtra (es todo suyo)
-  if (cliente.db_modalidad === 'byodb') {
-    return db.from(table)
-  }
-
-  // Managed: filtrar por cliente_id
-  return {
-    select: (cols?: string, opts?: any) => db.from(table).select(cols || '*', opts).eq('cliente_id', cliente.id),
-    insert: (rows: any) => {
-      const withClienteId = Array.isArray(rows)
-        ? rows.map((r) => ({ ...r, cliente_id: cliente.id }))
-        : { ...rows, cliente_id: cliente.id }
-      return db.from(table).insert(withClienteId)
-    },
-    update: (changes: any) => db.from(table).update(changes).eq('cliente_id', cliente.id),
-    delete: () => db.from(table).delete().eq('cliente_id', cliente.id),
-    upsert: (rows: any, opts?: any) => {
-      const withClienteId = Array.isArray(rows)
-        ? rows.map((r) => ({ ...r, cliente_id: cliente.id }))
-        : { ...rows, cliente_id: cliente.id }
-      return db.from(table).upsert(withClienteId, opts)
-    },
-  }
+function filtrarPorCliente(query: any, cliente: ClienteContext) {
+  return cliente.db_modalidad === 'managed' ? query.eq('cliente_id', cliente.id) : query
 }
 
 /**
  * Métricas estandarizadas que se muestran en dashboard.
- * Funciona para BYODB y Managed.
  */
 export async function getClienteMetricas(cliente: ClienteContext) {
   const db = createClienteSupabase(cliente)
@@ -154,9 +123,6 @@ export async function getClienteMetricas(cliente: ClienteContext) {
     hoy.setHours(0, 0, 0, 0)
     const hoyIso = hoy.toISOString()
 
-    // Helper que aplica filtro cliente_id solo si es Managed
-    const filtrar = (q: any) => cliente.db_modalidad === 'managed' ? q.eq('cliente_id', cliente.id) : q
-
     const [
       totalRes,
       sinContactarRes,
@@ -165,14 +131,12 @@ export async function getClienteMetricas(cliente: ClienteContext) {
       agendadosRes,
       cuentasIGRes,
     ] = await Promise.all([
-      filtrar(db.from('prospeccion_leads').select('*', { count: 'exact', head: true })),
-      filtrar(db.from('prospeccion_leads').select('*', { count: 'exact', head: true }).eq('etapa', 0)),
-      filtrar(db.from('prospeccion_leads').select('*', { count: 'exact', head: true })
-        .gte('etapa', 1).gte('ultimo_contacto', hoyIso)),
-      filtrar(db.from('prospeccion_leads').select('*', { count: 'exact', head: true })
-        .in('etapa', [2, 4, 6, 8, 10])),
-      filtrar(db.from('prospeccion_leads').select('*', { count: 'exact', head: true }).eq('etapa', 12)),
-      filtrar(db.from('instagram_cuentas').select('*', { count: 'exact', head: true })),
+      filtrarPorCliente(db.from('prospeccion_leads').select('*', { count: 'exact', head: true }), cliente),
+      filtrarPorCliente(db.from('prospeccion_leads').select('*', { count: 'exact', head: true }).eq('etapa', 0), cliente),
+      filtrarPorCliente(db.from('prospeccion_leads').select('*', { count: 'exact', head: true }).gte('etapa', 1).gte('ultimo_contacto', hoyIso), cliente),
+      filtrarPorCliente(db.from('prospeccion_leads').select('*', { count: 'exact', head: true }).in('etapa', [2, 4, 6, 8, 10]), cliente),
+      filtrarPorCliente(db.from('prospeccion_leads').select('*', { count: 'exact', head: true }).eq('etapa', 12), cliente),
+      filtrarPorCliente(db.from('instagram_cuentas').select('*', { count: 'exact', head: true }), cliente),
     ])
 
     return {
@@ -187,4 +151,98 @@ export async function getClienteMetricas(cliente: ClienteContext) {
     console.error('Error fetching metricas:', e)
     return null
   }
+}
+
+/**
+ * Lista conversaciones activas (leads con respuesta).
+ * Etapas pares = lead respondió y motor debe responder.
+ */
+export async function listarConversaciones(cliente: ClienteContext, limit: number = 50) {
+  const db = createClienteSupabase(cliente)
+  if (!db) return []
+
+  let query = db
+    .from('prospeccion_leads')
+    .select('handle, nombre, score, etapa, respuesta_lead, historial_conversacion, fecha_ultima_respuesta, ultimo_contacto')
+    .in('etapa', [2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    .order('fecha_ultima_respuesta', { ascending: false, nullsFirst: false })
+    .order('etapa', { ascending: false })
+    .limit(limit)
+
+  query = filtrarPorCliente(query, cliente)
+
+  const { data, error } = await query
+  if (error) {
+    console.error('listarConversaciones error:', error)
+    return []
+  }
+  return data ?? []
+}
+
+/**
+ * Lista leads agendados (etapa 12).
+ */
+export async function listarAgendados(cliente: ClienteContext, limit: number = 20) {
+  const db = createClienteSupabase(cliente)
+  if (!db) return []
+
+  let query = db
+    .from('prospeccion_leads')
+    .select('handle, nombre, score, etapa, respuesta_lead, historial_conversacion, fecha_ultima_respuesta, ultimo_contacto')
+    .eq('etapa', 12)
+    .order('ultimo_contacto', { ascending: false, nullsFirst: false })
+    .limit(limit)
+
+  query = filtrarPorCliente(query, cliente)
+
+  const { data, error } = await query
+  if (error) {
+    console.error('listarAgendados error:', error)
+    return []
+  }
+  return data ?? []
+}
+
+/**
+ * Lista las cuentas IG del cliente.
+ */
+export async function listarCuentasIG(cliente: ClienteContext) {
+  const db = createClienteSupabase(cliente)
+  if (!db) return []
+
+  let query = db
+    .from('instagram_cuentas')
+    .select('id, username, tipo, estado, sessionid, dms_hoy, ultimo_dm, score_min, score_max, created_at')
+    .order('tipo', { ascending: true })
+
+  query = filtrarPorCliente(query, cliente)
+
+  const { data, error } = await query
+  if (error) {
+    console.error('listarCuentasIG error:', error)
+    return []
+  }
+  return data ?? []
+}
+
+/**
+ * Lista los targets de scraping del cliente.
+ */
+export async function listarScrapingConfig(cliente: ClienteContext) {
+  const db = createClienteSupabase(cliente)
+  if (!db) return []
+
+  let query = db
+    .from('scraping_config')
+    .select('id, tipo, valor, activo, ultimo_scrape, leads_encontrados, created_at')
+    .order('tipo', { ascending: true })
+
+  query = filtrarPorCliente(query, cliente)
+
+  const { data, error } = await query
+  if (error) {
+    console.error('listarScrapingConfig error:', error)
+    return []
+  }
+  return data ?? []
 }
