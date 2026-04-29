@@ -1,12 +1,8 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { getClienteContext, clienteTieneDB, listarCuentasIG, listarScrapingConfig } from '@/lib/cliente-db'
+import { getClienteContext, clienteTieneDB } from '@/lib/cliente-db'
 import { createMasterAdminClient } from '@/lib/supabase/server'
-import {
-  Database, CheckCircle2, AlertCircle, Plug, Instagram, Mail, MessageSquare,
-  Sparkles, Workflow, Calendar, Bot, Settings as SettingsIcon, ArrowRight,
-  Zap, Lock, Search, Send, UserCircle
-} from 'lucide-react'
+import { Database, CheckCircle2, AlertCircle, Instagram, Mail, MessageSquare, Search, Sparkles, Calendar, Bot, Zap, ExternalLink } from 'lucide-react'
 
 export const revalidate = 0
 export const metadata = { title: 'Integraciones · ACELERAME' }
@@ -16,27 +12,31 @@ export default async function IntegracionesPage() {
   if (!cliente) redirect('/login')
 
   const tieneDB = clienteTieneDB(cliente)
-  const cuentasIG = tieneDB ? await listarCuentasIG(cliente) : []
-  const targets = tieneDB ? await listarScrapingConfig(cliente) : []
-  const tieneIG = cuentasIG.length > 0
-  const tieneTargets = targets.length > 0
-
-  // Cargar config personalización del cliente
   const admin = createMasterAdminClient()
+
+  // Verificar config IA
   const { data: config } = await admin
     .from('cliente_config')
-    .select('producto_nombre, buyer_persona_nicho, ejemplos_mensajes')
+    .select('producto_nombre, buyer_persona_descripcion, activo')
     .eq('cliente_id', cliente.id)
     .maybeSingle()
-  const configCompleto = !!(
-    config?.producto_nombre &&
-    config?.buyer_persona_nicho &&
-    config?.ejemplos_mensajes
-  )
+  const tieneConfig = !!(config?.producto_nombre)
 
-  // Anthropic key se valida por presencia de la env var (cliente no la maneja)
-  const tieneAnthropicKey = !!process.env.ANTHROPIC_API_KEY
-  const tieneResend = !!process.env.RESEND_API_KEY
+  // Verificar cuentas IG
+  const { count: cuentasIG } = await admin
+    .schema('public')
+    .from('instagram_cuentas')
+    .select('*', { count: 'exact', head: true })
+    .eq('cliente_id', cliente.id)
+    .eq('estado', 'activa')
+
+  // Verificar scraping targets
+  const { count: scrapingTargets } = await admin
+    .schema('public')
+    .from('scraping_config')
+    .select('*', { count: 'exact', head: true })
+    .eq('cliente_id', cliente.id)
+    .eq('activo', true)
 
   return (
     <div className="space-y-8">
@@ -47,358 +47,179 @@ export default async function IntegracionesPage() {
         </p>
       </div>
 
-      {/* === SECCIÓN 1: BASE DE DATOS === */}
-      <SeccionTitulo icon={Database} titulo="Base de datos" />
-      <CardConectable
-        titulo="Tu fuente de leads"
-        descripcion="Acá viven tus leads, conversaciones y resultados."
-        icon={Database}
-        conectado={tieneDB}
-        body={
-          tieneDB ? (
-            <div className="text-sm space-y-1">
-              <p>
-                <span className="text-fg-muted">Modalidad:</span>{' '}
-                <span className="font-medium">
-                  {cliente.db_modalidad === 'byodb' ? 'BYODB (tu Supabase)' : 'Managed (nuestro Supabase)'}
-                </span>
-              </p>
-              <p>
-                <span className="text-fg-muted">Schema:</span>{' '}
-                <span className="font-mono text-gold">{cliente.schema_db}</span>
-              </p>
-              <p>
-                <span className="text-fg-muted">Estado:</span>{' '}
-                <span className="text-success">{cliente.supabase_test_status}</span>
-              </p>
+      {/* === Base de datos === */}
+      <section>
+        <h2 className="font-serif text-xl font-bold mb-3">Base de datos</h2>
+        <div className="surface p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <Database className="w-7 h-7 text-gold mt-1" />
+              <div>
+                <p className="font-bold">Tu fuente de leads</p>
+                <p className="text-sm text-fg-muted">
+                  {tieneDB
+                    ? `Modalidad: ${cliente.db_modalidad === 'byodb' ? 'BYODB (tu Supabase)' : 'Managed (nuestro Supabase)'}`
+                    : 'Acá viven tus leads, conversaciones y resultados.'}
+                </p>
+              </div>
             </div>
-          ) : (
-            <div className="grid md:grid-cols-2 gap-4 mt-2">
-              <ModalidadCard
-                titulo="Managed"
-                descripcion="Nosotros la creamos por vos. Sin configurar nada."
-                recomendado
-                link="/integraciones/setup-managed"
-                ventajas={['Sin configuración', 'Listo en 30 seg', 'Apify scraping incluido']}
-              />
-              <ModalidadCard
-                titulo="BYODB"
-                descripcion="Traés tu propio Supabase. Para usuarios técnicos."
-                link="/integraciones/conectar-supabase"
-                ventajas={['Datos 100% tuyos', 'Sin lock-in', 'Tu propia infraestructura']}
-              />
+            <StatusBadge ok={tieneDB} />
+          </div>
+        </div>
+      </section>
+
+      {/* === Prospección === */}
+      <section>
+        <h2 className="font-serif text-xl font-bold mb-3">Prospección</h2>
+        <div className="space-y-3">
+          <IntegrationCard
+            icon={Search}
+            title="Apify — Scraping de Instagram"
+            description="Bot que encuentra leads por hashtags, cuentas o keywords."
+            ok={(scrapingTargets ?? 0) > 0}
+            badge={(scrapingTargets ?? 0) > 0 ? `${scrapingTargets} targets activos` : 'Sin targets'}
+            href="/configuracion/leads"
+            ctaLabel="Configurar targets"
+          />
+          <IntegrationCard
+            icon={Instagram}
+            title="Instagram — Cuentas para enviar DMs"
+            description="Cuentas IG con sessionid que envían los mensajes."
+            ok={(cuentasIG ?? 0) > 0}
+            badge={(cuentasIG ?? 0) > 0 ? `${cuentasIG} cuenta(s) activa(s)` : 'Sin cuentas'}
+            href="/configuracion/cuenta-ig"
+            ctaLabel="Cargar cuenta"
+          />
+        </div>
+      </section>
+
+      {/* === IA y automatización === */}
+      <section>
+        <h2 className="font-serif text-xl font-bold mb-3">IA y automatización</h2>
+        <div className="space-y-3">
+          <IntegrationCard
+            icon={Sparkles}
+            title="Personalización IA — Tu producto y tu voz"
+            description="La IA usa esto para personalizar cada mensaje según tu negocio."
+            ok={tieneConfig}
+            badge={tieneConfig ? `${config?.producto_nombre}` : 'Falta configurar'}
+            href="/configuracion/producto"
+            ctaLabel="Editar personalización"
+          />
+          <IntegrationCard
+            icon={Bot}
+            title="Claude IA — Mensajes personalizados"
+            description="La IA que personaliza cada mensaje según el lead."
+            ok={true}
+            badge="Activo (gestionado por sistema)"
+            managedBySystem
+          />
+          <IntegrationCard
+            icon={Zap}
+            title="n8n — Motor de prospección"
+            description="El cerebro que orquesta scraping, mensajes y followups."
+            ok={cliente.motor_activo}
+            badge={cliente.motor_activo ? 'Corriendo cada 10 min' : 'Pausado'}
+            managedBySystem
+          />
+        </div>
+      </section>
+
+      {/* === Comunicación === */}
+      <section>
+        <h2 className="font-serif text-xl font-bold mb-3">Canales de comunicación</h2>
+        <div className="space-y-3">
+          <IntegrationCard
+            icon={Calendar}
+            title="Calendario / Agenda"
+            description="Link de agendado que se manda cuando un lead acepta llamada."
+            ok={false}
+            badge="Configurar en /configuracion/agenda"
+            href="/configuracion/agenda"
+            ctaLabel="Configurar"
+          />
+          <IntegrationCard
+            icon={Mail}
+            title="Email cold outreach (Resend)"
+            description="Envío de emails desde el dominio verificado."
+            ok={true}
+            badge="Gestionado por sistema"
+            managedBySystem
+          />
+        </div>
+      </section>
+
+      {/* === Próximamente (collapsible) === */}
+      <details className="surface p-5">
+        <summary className="cursor-pointer font-serif text-lg font-bold">
+          Próximamente
+        </summary>
+        <div className="mt-4 grid md:grid-cols-2 gap-3 opacity-60">
+          <div className="flex items-center gap-3">
+            <MessageSquare className="w-5 h-5" />
+            <div>
+              <p className="text-sm font-medium">WhatsApp Business</p>
+              <p className="text-xs text-fg-muted">Outreach por WA cuando el lead deja su número.</p>
             </div>
-          )
-        }
-      />
-
-      {/* === SECCIÓN 2: PROSPECCIÓN === */}
-      <SeccionTitulo icon={Search} titulo="Prospección" />
-
-      <CardConectable
-        titulo="Apify — Scraping de Instagram"
-        descripcion="Bot que encuentra leads por hashtags, cuentas o keywords."
-        icon={Search}
-        conectado={tieneTargets}
-        body={
-          <div className="text-sm">
-            {tieneTargets ? (
-              <p className="text-fg-muted">
-                <span className="text-fg">{targets.length} targets activos:</span>{' '}
-                {targets.slice(0, 3).map((t: any, i: number) => (
-                  <span key={i} className="font-mono text-xs px-1.5 py-0.5 mx-0.5 rounded bg-bg-overlay text-gold">
-                    {t.tipo === 'hashtag' ? '#' : '@'}{t.valor}
-                  </span>
-                ))}
-                {targets.length > 3 && <span> y {targets.length - 3} más…</span>}
-              </p>
-            ) : (
-              <p className="text-fg-muted">
-                Configurá hashtags, cuentas o keywords para que Apify encuentre leads automáticamente.
-              </p>
-            )}
-            {tieneDB && (
-              <Link
-                href="/integraciones/apify"
-                className="inline-flex items-center gap-2 text-sm text-gold hover:text-gold-hover mt-3"
-              >
-                {tieneTargets ? 'Editar targets' : 'Configurar targets'} <ArrowRight className="w-4 h-4" />
-              </Link>
-            )}
           </div>
-        }
-        bloqueado={!tieneDB}
-        razonBloqueo="Conectá tu base de datos primero"
-      />
-
-      <CardConectable
-        titulo="Instagram — Cuentas para enviar DMs"
-        descripcion="Cuentas IG con sessionid que envían los mensajes."
-        icon={Instagram}
-        conectado={tieneIG}
-        body={
-          <div className="text-sm">
-            {tieneIG ? (
-              <p className="text-fg-muted">
-                <span className="text-fg">{cuentasIG.length} cuenta(s) activa(s):</span>{' '}
-                {cuentasIG.map((c: any) => `@${c.username}`).join(', ')}
-              </p>
-            ) : (
-              <p className="text-fg-muted">
-                Cargá las cuentas IG que mandarán los DMs. Necesitás el sessionid de cada cuenta.
-              </p>
-            )}
-            {tieneDB && (
-              <Link
-                href="/integraciones/instagram"
-                className="inline-flex items-center gap-2 text-sm text-gold hover:text-gold-hover mt-3"
-              >
-                {tieneIG ? 'Gestionar cuentas' : 'Cargar cuenta'} <ArrowRight className="w-4 h-4" />
-              </Link>
-            )}
+          <div className="flex items-center gap-3">
+            <MessageSquare className="w-5 h-5" />
+            <div>
+              <p className="text-sm font-medium">ManyChat</p>
+              <p className="text-xs text-fg-muted">Webhooks para responder en tiempo real.</p>
+            </div>
           </div>
-        }
-        bloqueado={!tieneDB}
-        razonBloqueo="Conectá tu base de datos primero"
-      />
-
-      {/* === SECCIÓN 3: IA Y AUTOMATIZACIÓN === */}
-      <SeccionTitulo icon={Bot} titulo="IA y automatización" />
-
-      <CardConectable
-        titulo="Personalización IA — Tu producto y tu voz"
-        descripcion="La IA usa esto para personalizar cada mensaje según tu negocio."
-        icon={UserCircle}
-        conectado={configCompleto}
-        body={
-          <div className="text-sm">
-            {configCompleto ? (
-              <p className="text-fg-muted">
-                <span className="text-fg">Producto:</span>{' '}
-                <span className="text-gold">{config?.producto_nombre}</span>
-                {' · '}
-                <span className="text-fg">Nicho:</span>{' '}
-                {config?.buyer_persona_nicho}
-              </p>
-            ) : (
-              <p className="text-fg-muted">
-                Cargá tu producto, buyer persona y ejemplos de tu voz. Sin esto, la
-                IA escribe genérico.
-              </p>
-            )}
-            <Link
-              href="/configuracion"
-              className="inline-flex items-center gap-2 text-sm text-gold hover:text-gold-hover mt-3"
-            >
-              {configCompleto ? 'Editar personalización' : 'Configurar ahora'}{' '}
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
-        }
-      />
-
-      <CardConectable
-        titulo="Claude IA — Mensajes personalizados"
-        descripcion="La IA que personaliza cada mensaje según el lead."
-        icon={Sparkles}
-        conectado={tieneAnthropicKey}
-        gestionadoSistema
-        body={
-          <p className="text-sm text-fg-muted">
-            {tieneAnthropicKey
-              ? 'Claude está activo. Cada mensaje se genera personalizado según la bio, el nicho y la respuesta del lead.'
-              : 'La IA todavía no está conectada. Avisanos para activarla.'}
-          </p>
-        }
-      />
-
-      <CardConectable
-        titulo="n8n — Motor de prospección"
-        descripcion="El cerebro que orquesta scraping, mensajes y followups."
-        icon={Workflow}
-        conectado={cliente.motor_activo}
-        gestionadoSistema
-        body={
-          <div className="text-sm">
-            <p className="text-fg-muted mb-2">
-              {cliente.motor_activo
-                ? 'Motor corriendo cada 10 minutos.'
-                : 'Motor pausado. Activalo cuando estés listo para prospectar.'}
-            </p>
-            <Link
-              href="/campanas"
-              className="inline-flex items-center gap-2 text-sm text-gold hover:text-gold-hover"
-            >
-              Ir al motor <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
-        }
-      />
-
-      {/* === SECCIÓN 4: COMUNICACIÓN === */}
-      <SeccionTitulo icon={Send} titulo="Canales de comunicación" />
-
-      <CardProximamente
-        titulo="Email cold outreach (Resend)"
-        descripcion="Envío de cold emails con dominio verificado y SPF/DKIM."
-        icon={Mail}
-        estado={tieneResend ? 'configurado' : 'proximamente'}
-      />
-
-      <CardProximamente
-        titulo="WhatsApp Business"
-        descripcion="Outreach automático por WhatsApp cuando el lead deja su número."
-        icon={MessageSquare}
-        estado="proximamente"
-      />
-
-      <CardProximamente
-        titulo="ManyChat"
-        descripcion="Webhooks de Instagram DM para responder en tiempo real."
-        icon={Bot}
-        estado="proximamente"
-      />
-
-      <CardProximamente
-        titulo="Calendly / agenda"
-        descripcion="Link de agendado que se manda cuando un lead acepta llamada."
-        icon={Calendar}
-        estado="proximamente"
-      />
+        </div>
+      </details>
     </div>
   )
 }
 
-// =============== Helpers de UI ===============
-
-function SeccionTitulo({ icon: Icon, titulo }: { icon: any; titulo: string }) {
+function StatusBadge({ ok }: { ok: boolean }) {
+  if (ok) {
+    return (
+      <span className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-full bg-success/10 border border-success/30 text-success text-xs">
+        <CheckCircle2 className="w-3 h-3" /> Conectado
+      </span>
+    )
+  }
   return (
-    <div className="flex items-center gap-2 pt-4 border-t border-border/40">
-      <Icon className="w-4 h-4 text-gold" />
-      <h2 className="text-xs uppercase tracking-wider text-fg-muted font-medium">{titulo}</h2>
-    </div>
+    <span className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-full bg-warning/10 border border-warning/30 text-warning text-xs">
+      <AlertCircle className="w-3 h-3" /> Sin conectar
+    </span>
   )
 }
 
-function CardConectable({
-  titulo,
-  descripcion,
-  icon: Icon,
-  conectado,
-  body,
-  bloqueado,
-  razonBloqueo,
-  gestionadoSistema,
+function IntegrationCard({
+  icon: Icon, title, description, ok, badge, href, ctaLabel, managedBySystem,
 }: {
-  titulo: string
-  descripcion: string
-  icon: any
-  conectado: boolean
-  body?: React.ReactNode
-  bloqueado?: boolean
-  razonBloqueo?: string
-  gestionadoSistema?: boolean
+  icon: any; title: string; description: string; ok: boolean
+  badge?: string; href?: string; ctaLabel?: string; managedBySystem?: boolean
 }) {
   return (
-    <div className={`surface p-6 ${bloqueado ? 'opacity-60' : ''}`}>
-      <div className="flex items-start gap-4">
-        <div className={`w-10 h-10 shrink-0 rounded-lg flex items-center justify-center ${
-          conectado ? 'bg-success/10 border border-success/30' : 'bg-bg-overlay border border-border'
-        }`}>
-          <Icon className={`w-5 h-5 ${conectado ? 'text-success' : 'text-fg-muted'}`} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <h3 className="font-serif text-lg font-bold">{titulo}</h3>
-              <p className="text-sm text-fg-muted">{descripcion}</p>
-            </div>
-            <div className="flex flex-col items-end gap-1">
-              {conectado ? (
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-success/10 border border-success/30 text-success text-xs">
-                  <CheckCircle2 className="w-3 h-3" /> Conectado
-                </span>
-              ) : bloqueado ? (
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-bg-overlay border border-border text-fg-muted text-xs">
-                  <Lock className="w-3 h-3" /> Bloqueado
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-bg-overlay border border-border text-fg-muted text-xs">
-                  <AlertCircle className="w-3 h-3" /> Sin conectar
-                </span>
-              )}
-              {gestionadoSistema && (
-                <span className="text-[10px] text-fg-subtle">gestionado por sistema</span>
-              )}
-            </div>
+    <div className="surface p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-4 flex-1 min-w-0">
+          <Icon className={`w-6 h-6 mt-1 ${ok ? 'text-gold' : 'text-fg-muted'}`} />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold">{title}</p>
+            <p className="text-sm text-fg-muted mt-0.5">{description}</p>
+            {badge && (
+              <p className={`text-xs mt-2 ${ok ? 'text-success' : 'text-fg-subtle'}`}>
+                {badge}
+              </p>
+            )}
           </div>
-          {bloqueado && razonBloqueo && (
-            <p className="text-xs text-warning mt-2">{razonBloqueo}</p>
+        </div>
+        <div className="shrink-0 flex items-center gap-2">
+          <StatusBadge ok={ok} />
+          {href && ctaLabel && !managedBySystem && (
+            <Link href={href} className="text-xs text-gold hover:underline inline-flex items-center gap-1">
+              {ctaLabel} <ExternalLink className="w-3 h-3" />
+            </Link>
           )}
-          {body && !bloqueado && <div className="mt-3">{body}</div>}
         </div>
       </div>
     </div>
-  )
-}
-
-function CardProximamente({
-  titulo,
-  descripcion,
-  icon: Icon,
-  estado,
-}: {
-  titulo: string
-  descripcion: string
-  icon: any
-  estado: 'proximamente' | 'configurado'
-}) {
-  return (
-    <div className={`surface p-5 ${estado === 'proximamente' ? 'opacity-60' : ''}`}>
-      <div className="flex items-start gap-4">
-        <div className="w-10 h-10 shrink-0 rounded-lg bg-bg-overlay border border-border flex items-center justify-center">
-          <Icon className="w-5 h-5 text-fg-muted" />
-        </div>
-        <div className="flex-1">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <h3 className="font-serif font-bold">{titulo}</h3>
-              <p className="text-sm text-fg-muted">{descripcion}</p>
-            </div>
-            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-bg-overlay border border-border text-fg-muted text-xs">
-              {estado === 'configurado' ? (
-                <>
-                  <CheckCircle2 className="w-3 h-3 text-success" /> Configurado
-                </>
-              ) : (
-                'Próximamente'
-              )}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ModalidadCard({ titulo, descripcion, recomendado, link, ventajas }: any) {
-  const className = recomendado ? 'card-gold p-5 relative' : 'surface p-5'
-  return (
-    <Link href={link} className={`${className} hover:border-gold/50 transition-colors block`}>
-      {recomendado && (
-        <span className="absolute -top-2 right-4 px-2 py-0.5 rounded-full bg-gold text-bg-base text-xs font-bold">
-          Recomendado
-        </span>
-      )}
-      <h3 className="font-serif text-lg font-bold mb-1">{titulo}</h3>
-      <p className="text-sm text-fg-muted mb-3">{descripcion}</p>
-      <ul className="space-y-1 text-xs text-fg-muted">
-        {ventajas.map((v: string, i: number) => (
-          <li key={i} className="flex items-center gap-2">
-            <CheckCircle2 className="w-3 h-3 text-success" /> {v}
-          </li>
-        ))}
-      </ul>
-    </Link>
   )
 }
