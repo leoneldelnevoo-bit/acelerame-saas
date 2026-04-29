@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { createMasterServerClient, createMasterAdminClient } from './supabase/server'
+import { createMasterServerClient, createMasterAdminClient, createManagedClientDB } from './supabase/server'
 
 /**
  * Tipo de cliente con info completa
@@ -13,21 +13,15 @@ export type ClienteContext = {
   estado: string
   es_founder: boolean
   motor_activo: boolean
-  // Modalidad de DB
   db_modalidad: 'byodb' | 'managed' | null
-  // Fuente de leads
   lead_source_mode: 'scraping_auto' | 'byol' | 'mixed' | null
-  // Para BYODB
   supabase_url: string | null
   supabase_anon_key: string | null
   supabase_project_id: string | null
-  // Para Managed (DB nuestra)
   schema_db: string | null
   supabase_test_status: string | null
-  // Onboarding
   onboarding_completado: boolean
   onboarding_paso: number
-  // Saldos
   saldo?: {
     creditos_actuales: number
     creditos_comprados_total: number
@@ -35,9 +29,6 @@ export type ClienteContext = {
   } | null
 }
 
-/**
- * Obtiene el contexto completo del cliente logueado.
- */
 export async function getClienteContext(): Promise<ClienteContext | null> {
   const supabase = await createMasterServerClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -71,11 +62,6 @@ export async function getClienteContext(): Promise<ClienteContext | null> {
   } as ClienteContext
 }
 
-/**
- * Verifica si el cliente tiene una DB lista para usar.
- * - Managed: SIEMPRE listo (todos los clientes managed comparten public.X con cliente_id)
- * - BYODB: requiere supabase_url + key + test_status='ok'
- */
 export function clienteTieneDB(cliente: ClienteContext): boolean {
   if (cliente.db_modalidad === 'byodb') {
     return !!(cliente.supabase_url && cliente.supabase_anon_key && cliente.supabase_test_status === 'ok')
@@ -86,7 +72,10 @@ export function clienteTieneDB(cliente: ClienteContext): boolean {
 /**
  * Crea cliente Supabase para acceder a los datos del cliente.
  * - BYODB: usa el Supabase del cliente (schema public)
- * - Managed: usa nuestro Supabase (schema public con filtros por cliente_id)
+ * - Managed: usa nuestro Supabase con schema 'public' (filtros por cliente_id)
+ *
+ * IMPORTANTE: Para Managed siempre devolvemos un cliente apuntando a 'public',
+ * ya que los datos viven en public.X con cliente_id (NO en cliente_<slug>.X).
  */
 export function createClienteSupabase(cliente: ClienteContext): SupabaseClient | null {
   if (!clienteTieneDB(cliente)) return null
@@ -99,21 +88,17 @@ export function createClienteSupabase(cliente: ClienteContext): SupabaseClient |
     })
   }
 
-  // Managed: usa el admin client del master (schema public con filtros)
-  return createMasterAdminClient() as unknown as SupabaseClient
+  // Managed: usar createManagedClientDB con schema 'public' (no cliente_<slug>)
+  return createManagedClientDB('public') as unknown as SupabaseClient
 }
 
 /**
  * Helper: aplica filtro cliente_id solo en modalidad Managed.
- * En BYODB no se filtra porque el Supabase es del cliente.
  */
 function filtrarPorCliente(query: any, cliente: ClienteContext) {
   return cliente.db_modalidad === 'managed' ? query.eq('cliente_id', cliente.id) : query
 }
 
-/**
- * Métricas estandarizadas que se muestran en dashboard.
- */
 export async function getClienteMetricas(cliente: ClienteContext) {
   const db = createClienteSupabase(cliente)
   if (!db) return null
@@ -153,10 +138,6 @@ export async function getClienteMetricas(cliente: ClienteContext) {
   }
 }
 
-/**
- * Lista conversaciones activas (leads con respuesta).
- * Etapas pares = lead respondió y motor debe responder.
- */
 export async function listarConversaciones(cliente: ClienteContext, limit: number = 50) {
   const db = createClienteSupabase(cliente)
   if (!db) return []
@@ -179,9 +160,6 @@ export async function listarConversaciones(cliente: ClienteContext, limit: numbe
   return data ?? []
 }
 
-/**
- * Lista leads agendados (etapa 12).
- */
 export async function listarAgendados(cliente: ClienteContext, limit: number = 20) {
   const db = createClienteSupabase(cliente)
   if (!db) return []
@@ -203,9 +181,6 @@ export async function listarAgendados(cliente: ClienteContext, limit: number = 2
   return data ?? []
 }
 
-/**
- * Lista las cuentas IG del cliente.
- */
 export async function listarCuentasIG(cliente: ClienteContext) {
   const db = createClienteSupabase(cliente)
   if (!db) return []
@@ -225,9 +200,6 @@ export async function listarCuentasIG(cliente: ClienteContext) {
   return data ?? []
 }
 
-/**
- * Lista los targets de scraping del cliente.
- */
 export async function listarScrapingConfig(cliente: ClienteContext) {
   const db = createClienteSupabase(cliente)
   if (!db) return []
