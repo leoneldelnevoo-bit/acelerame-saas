@@ -1,32 +1,80 @@
 'use client'
 
-import { useState } from 'react'
-import { Calendar, Save, ExternalLink } from 'lucide-react'
+import { useState, useMemo } from 'react'
+import { Calendar, Save, ExternalLink, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react'
+import { PROVEEDORES, detectarProveedor, type AgendaProveedor } from '@/lib/agenda-connectors'
 
-type Config = {
-  link_agenda: string | null
-  duracion_llamada_min: number | null
+type Initial = {
+  duracion: number
+  proveedor: AgendaProveedor | null
+  url: string
+  status: string
+  validadoEn: string | null
 }
 
-export default function AgendaForm({ initialConfig }: { initialConfig: Config | null }) {
-  const [config, setConfig] = useState<Config>({
-    link_agenda: initialConfig?.link_agenda ?? '',
-    duracion_llamada_min: initialConfig?.duracion_llamada_min ?? 20,
-  })
+export default function AgendaForm({ initial }: { initial: Initial }) {
+  const [proveedor, setProveedor] = useState<AgendaProveedor | null>(initial.proveedor)
+  const [url, setUrl] = useState(initial.url)
+  const [duracion, setDuracion] = useState(initial.duracion)
+  const [status, setStatus] = useState(initial.status)
+  const [validadoEn, setValidadoEn] = useState(initial.validadoEn)
   const [saving, setSaving] = useState(false)
+  const [validating, setValidating] = useState(false)
   const [savedAt, setSavedAt] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  async function save() {
+  // Auto-detectar proveedor cuando el cliente pega URL
+  const proveedorDetectado = useMemo(() => detectarProveedor(url), [url])
+
+  const proveedorActivo = proveedor ?? proveedorDetectado
+  const info = PROVEEDORES.find((p) => p.id === proveedorActivo)
+
+  async function validarYGuardar() {
     setSaving(true)
+    setErrorMsg(null)
     try {
-      const res = await fetch('/api/cliente/config', {
+      const res = await fetch('/api/cliente/agenda', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ section: 'agenda', data: config }),
+        body: JSON.stringify({
+          proveedor: proveedorActivo ?? 'custom',
+          url: url.trim(),
+          duracion_llamada_min: duracion,
+        }),
       })
-      if (res.ok) setSavedAt(new Date().toLocaleTimeString())
+      const data = await res.json()
+      if (!res.ok) {
+        setErrorMsg(data.error || 'Error guardando')
+        return
+      }
+      setStatus(data.status)
+      setValidadoEn(data.validado_en)
+      setSavedAt(new Date().toLocaleTimeString())
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'Error de red')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function probarLink() {
+    if (!url.trim()) return
+    setValidating(true)
+    try {
+      const res = await fetch('/api/cliente/agenda?action=ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim() }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setErrorMsg(null)
+        alert('✅ Link funciona correctamente (status ' + data.status + ')')
+      } else {
+        setErrorMsg(`Link no responde: ${data.error || 'status ' + data.status}`)
+      }
+    } finally {
+      setValidating(false)
     }
   }
 
@@ -40,24 +88,87 @@ export default function AgendaForm({ initialConfig }: { initialConfig: Config | 
         <p className="text-fg-muted mt-1">El link que la IA manda cuando un lead acepta llamada.</p>
       </div>
 
+      {/* Estado actual */}
+      {status === 'ok' && (
+        <div className="surface p-4 border-success/40 bg-success/5">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
+            <div>
+              <p className="font-bold text-success">Link de agenda activo</p>
+              <p className="text-sm text-fg-muted mt-1">
+                Validado {validadoEn ? new Date(validadoEn).toLocaleString() : 'recientemente'}.
+                La IA va a usar este link cuando un lead acepte una llamada.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {status === 'error' && (
+        <div className="surface p-4 border-danger/40 bg-danger/5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-danger shrink-0" />
+            <div>
+              <p className="font-bold text-danger">El link no responde</p>
+              <p className="text-sm text-fg-muted mt-1">Probá con otro link o contactá a soporte.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Selector de proveedor */}
+      <div className="surface p-6 space-y-4">
+        <h2 className="font-serif text-lg font-bold">¿Qué proveedor usás?</h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          {PROVEEDORES.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setProveedor(p.id)}
+              className={`p-4 rounded-lg border text-left transition-colors ${
+                proveedorActivo === p.id
+                  ? 'border-gold bg-gold/5'
+                  : 'border-border hover:border-gold/50'
+              }`}
+            >
+              <div className="text-2xl mb-1">{p.logo}</div>
+              <p className="font-bold text-sm">{p.nombre}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* URL + Duración */}
       <div className="surface p-6 space-y-5">
         <div>
           <label className="block text-sm font-bold mb-1">Link de tu calendario</label>
           <input
             type="url"
-            value={config.link_agenda ?? ''}
-            onChange={(e) => setConfig({ ...config, link_agenda: e.target.value })}
-            placeholder="https://calendly.com/tu-nombre o https://acelerame.online/agendar.html"
-            className="input w-full"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={info?.ejemplo ?? 'https://...'}
+            className="input w-full font-mono"
+            spellCheck={false}
           />
-          <p className="text-xs text-fg-muted mt-1">
-            Calendly, Cal.com, TidyCal, Google Calendar, o tu propio link.
-          </p>
-          {config.link_agenda && (
-            <a href={config.link_agenda} target="_blank" rel="noopener noreferrer" className="text-xs text-gold hover:underline inline-flex items-center gap-1 mt-2">
-              Probar link <ExternalLink className="w-3 h-3" />
-            </a>
+          {info && (
+            <p className="text-xs text-fg-muted mt-1">{info.instrucciones}</p>
           )}
+          {url && proveedorDetectado && proveedorDetectado !== proveedor && (
+            <p className="text-xs text-info mt-1">
+              💡 Detecté que es un link de <strong>{PROVEEDORES.find(p => p.id === proveedorDetectado)?.nombre}</strong> — ya lo cambié arriba.
+            </p>
+          )}
+          <div className="flex items-center gap-2 mt-2">
+            {url && (
+              <a href={url} target="_blank" rel="noopener noreferrer" className="text-xs text-gold hover:underline inline-flex items-center gap-1">
+                Abrir en pestaña nueva <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+            {url && (
+              <button onClick={probarLink} disabled={validating} className="text-xs text-gold hover:underline inline-flex items-center gap-1">
+                {validating ? <Loader2 className="w-3 h-3 animate-spin" /> : '🔍'} Probar que funcione
+              </button>
+            )}
+          </div>
         </div>
 
         <div>
@@ -66,32 +177,40 @@ export default function AgendaForm({ initialConfig }: { initialConfig: Config | 
             type="number"
             min={10}
             max={120}
-            value={config.duracion_llamada_min ?? 20}
-            onChange={(e) => setConfig({ ...config, duracion_llamada_min: parseInt(e.target.value) || 20 })}
+            value={duracion}
+            onChange={(e) => setDuracion(parseInt(e.target.value) || 20)}
             className="input md:w-32"
           />
           <p className="text-xs text-fg-muted mt-1">
-            La IA lo menciona cuando propone la llamada. Recomendado: 15-30 min para llamadas de descubrimiento.
+            La IA lo menciona cuando propone la llamada. Recomendado: 15-30 min para descubrimiento.
           </p>
         </div>
       </div>
 
-      <div className="surface p-6 bg-bg-overlay/50">
-        <p className="text-sm font-bold mb-2">Cómo lo usa la IA</p>
+      {/* Preview de mensaje */}
+      <div className="surface p-6 bg-bg-overlay/30">
+        <p className="text-sm font-bold mb-2">Preview · Cómo lo usa la IA</p>
         <p className="text-sm text-fg-muted mb-3">
-          Cuando un lead llega a la etapa "Aceptó llamada" (etapa 10), la IA va a mandar un mensaje similar a:
+          Cuando un lead llega a la etapa "Aceptó llamada", la IA envía un mensaje similar a:
         </p>
         <div className="bg-bg-base rounded-lg p-3 text-sm font-mono text-fg-muted border border-border">
-          {config.link_agenda
-            ? `Genial! Acá te dejo mi link para coordinar una llamada de ${config.duracion_llamada_min} min: ${config.link_agenda}`
-            : 'Falta configurar tu link de agenda arriba.'}
+          {url
+            ? `Genial! Acá te dejo mi link para coordinar una llamada de ${duracion} min: ${url}`
+            : '👆 Configurá el link arriba para ver el preview real.'}
         </div>
       </div>
 
+      {/* Acciones */}
+      {errorMsg && (
+        <div className="surface p-4 border-danger/40">
+          <p className="text-sm text-danger">⚠️ {errorMsg}</p>
+        </div>
+      )}
+
       <div className="flex items-center gap-4">
-        <button onClick={save} disabled={saving} className="btn-primary">
-          <Save className="w-4 h-4" />
-          {saving ? 'Guardando...' : 'Guardar cambios'}
+        <button onClick={validarYGuardar} disabled={saving || !url.trim()} className="btn-primary">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {saving ? 'Validando y guardando...' : 'Validar y guardar'}
         </button>
         {savedAt && <span className="text-sm text-success">✓ Guardado a las {savedAt}</span>}
       </div>
