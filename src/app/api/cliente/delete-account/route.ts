@@ -39,14 +39,15 @@ export async function POST(req: NextRequest) {
   // Soft delete: marca para eliminación en 30 días
   const fechaPurga = new Date()
   fechaPurga.setDate(fechaPurga.getDate() + 30)
+  const fechaPurgaISO = fechaPurga.toISOString()
 
   const { error } = await admin
     .from('clientes')
     .update({
       estado: 'pendiente_eliminacion',
-      motor_activo: false, // detener motor inmediatamente
+      motor_activo: false,
       eliminacion_solicitada_en: new Date().toISOString(),
-      fecha_purga: fechaPurga.toISOString(),
+      fecha_purga: fechaPurgaISO,
     })
     .eq('id', cliente.id)
 
@@ -68,12 +69,12 @@ export async function POST(req: NextRequest) {
     .update({ activo: false })
     .eq('cliente_id', cliente.id)
 
-  await auditLog(cliente.id, 'cuenta_eliminacion_solicitada', { fecha_purga }, req)
+  await auditLog(cliente.id, 'cuenta_eliminacion_solicitada', { fecha_purga: fechaPurgaISO }, req)
 
   return NextResponse.json({
     ok: true,
     mensaje: 'Tu cuenta fue marcada para eliminación. Tenés 30 días para reactivarla si cambiás de opinión escribiendo a soporte.',
-    fecha_purga: fechaPurga.toISOString(),
+    fecha_purga: fechaPurgaISO,
   })
 }
 
@@ -117,9 +118,7 @@ export async function DELETE(req: NextRequest) {
   await admin.from('creditos_saldo').delete().eq('cliente_id', cid)
   await admin.from('pagos_usdt_pendientes').delete().eq('cliente_id', cid)
   await admin.from('leads_imports').delete().eq('cliente_id', cid)
-  // audit_log queda con cliente_id NULL (FK ON DELETE SET NULL)
 
-  // Por último, el cliente
   const { error } = await admin.from('clientes').delete().eq('id', cid)
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
